@@ -360,13 +360,39 @@ int renderer_init(Renderer *r, SDL_Window *window)
     pci.target_info.depth_stencil_format              = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
 
     r->pipeline_world = SDL_CreateGPUGraphicsPipeline(r->gpu, &pci);
+
+    /* Transparent pipeline - same as world but with alpha blending, no depth write */
+    SDL_GPUColorTargetBlendState blend;
+    SDL_zero(blend);
+    blend.enable_blend          = true;
+    blend.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;
+    blend.dst_color_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.color_blend_op        = SDL_GPU_BLENDOP_ADD;
+    blend.src_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE;
+    blend.dst_alpha_blendfactor = SDL_GPU_BLENDFACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.alpha_blend_op        = SDL_GPU_BLENDOP_ADD;
+
+    SDL_GPUColorTargetDescription transp_color_desc;
+    SDL_zero(transp_color_desc);
+    transp_color_desc.format      = sc_fmt;
+    transp_color_desc.blend_state = blend;
+
+    SDL_GPUGraphicsPipelineCreateInfo tpci = pci;
+    tpci.depth_stencil_state.enable_depth_write = false; /* read depth, no write */
+    tpci.target_info.color_target_descriptions  = &transp_color_desc;
+
+    r->pipeline_transparent = SDL_CreateGPUGraphicsPipeline(r->gpu, &tpci);
+
     SDL_ReleaseGPUShader(r->gpu, vert);
     SDL_ReleaseGPUShader(r->gpu, frag);
 
-    if (!r->pipeline_world) {
+    if (!r->pipeline_world || !r->pipeline_transparent) {
         fprintf(stderr, "SDL_CreateGPUGraphicsPipeline failed: %s\n", SDL_GetError());
         return 0;
     }
+
+    /* Init wall alphas to fully opaque */
+    for (int i = 0; i < WALL_COUNT; i++) r->wall_alpha[i] = 1.0f;
 
     /* Create depth texture */
     renderer_resize(r, r->width, r->height);
@@ -411,8 +437,9 @@ void renderer_shutdown(Renderer *r)
     free_mesh(r->gpu, &r->mesh_boost_pad_large);
     free_mesh(r->gpu, &r->mesh_boost_pad_small);
 
-    if (r->depth_texture)  SDL_ReleaseGPUTexture(r->gpu, r->depth_texture);
-    if (r->pipeline_world) SDL_ReleaseGPUGraphicsPipeline(r->gpu, r->pipeline_world);
+    if (r->depth_texture)        SDL_ReleaseGPUTexture(r->gpu, r->depth_texture);
+    if (r->pipeline_world)       SDL_ReleaseGPUGraphicsPipeline(r->gpu, r->pipeline_world);
+    if (r->pipeline_transparent) SDL_ReleaseGPUGraphicsPipeline(r->gpu, r->pipeline_transparent);
 
     SDL_ReleaseWindowFromGPUDevice(r->gpu, r->window);
     SDL_DestroyGPUDevice(r->gpu);
@@ -483,6 +510,9 @@ void camera_chase(Camera *cam, Vec3 car_pos, Vec3 car_fwd,
     float alpha = 1.0f - expf(-8.0f * dt);
     cam->pos    = vec3_lerp(cam->pos, behind, alpha);
 
+    /* Clamp camera above the floor */
+    if (cam->pos.y < 2.0f) cam->pos.y = 2.0f;
+
     /* Look at a point between car and ball */
     Vec3 look_at = vec3_lerp(car_pos, ball_pos, 0.4f);
     look_at.y   += 1.0f;
@@ -533,6 +563,56 @@ static void draw_mesh(SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *pass,
     SDL_DrawGPUIndexedPrimitives(pass, mesh->index_count, 1, 0, 0, 0);
 }
 
+/* ── Wall transparency ───────────────────────────────────────────────────── */
+
+/*
+ * Check if a wall plane occludes the line of sight from camera to car.
+ * wall_normal points inward (into the arena).
+ * wall_point is any point on the wall plane.
+ * Returns true if the camera-to-car ray crosses the wall.
+ */
+static bool wall_occludes(Vec3 cam_pos, Vec3 car_pos,
+                           Vec3 wall_point, Vec3 wall_normal)
+{
+    /* Ray: P = cam_pos + t*(car_pos - cam_pos) */
+    Vec3 ray_dir = vec3_sub(car_pos, cam_pos);
+    float denom  = vec3_dot(ray_dir, wall_normal);
+
+    /* Ray parallel to wall - no intersection */
+    if (fabsf(denom) < 1e-6f) return false;
+
+    float t = vec3_dot(vec3_sub(wall_point, cam_pos), wall_normal) / denom;
+
+    /* Intersection must be between camera and car (0 < t < 1) */
+    return (t > 0.05f && t < 0.95f);
+}
+
+static void update_wall_alphas(Renderer *r, Vec3 cam_pos, Vec3 car_pos)
+{
+    /* Wall planes: normal points inward */
+    typedef struct { Vec3 point; Vec3 normal; } WallPlane;
+    WallPlane walls[WALL_COUNT] = {
+        /* WALL_LEFT   */ { {-ARENA_HALF_WID, 0, 0}, { 1, 0,  0} },
+        /* WALL_RIGHT  */ { { ARENA_HALF_WID, 0, 0}, {-1, 0,  0} },
+        /* WALL_BLUE   */ { {0, 0, -ARENA_HALF_LEN}, { 0, 0,  1} },
+        /* WALL_ORANGE */ { {0, 0,  ARENA_HALF_LEN}, { 0, 0, -1} },
+    };
+
+    float target_alpha[WALL_COUNT];
+    for (int i = 0; i < WALL_COUNT; i++) {
+        target_alpha[i] = wall_occludes(cam_pos, car_pos,
+                                        walls[i].point, walls[i].normal)
+                          ? 0.15f : 1.0f;
+    }
+
+    /* Smooth fade in/out */
+    float fade_speed = 8.0f * FIXED_DT;
+    for (int i = 0; i < WALL_COUNT; i++) {
+        float diff = target_alpha[i] - r->wall_alpha[i];
+        r->wall_alpha[i] += diff * fade_speed * 10.0f;
+        r->wall_alpha[i]  = CLAMP(r->wall_alpha[i], 0.1f, 1.0f);
+    }
+}
 /* ── renderer_draw_frame ─────────────────────────────────────────────────── */
 
 void renderer_draw_frame(Renderer *r, const MatchState *match)
@@ -569,6 +649,9 @@ void renderer_draw_frame(Renderer *r, const MatchState *match)
 
     Vec3 light_dir = vec3_norm((Vec3){0.5f, -1.0f, 0.3f});
 
+    /* Update wall transparency based on camera-to-car occlusion */
+    update_wall_alphas(r, r->camera.pos, car_pos);
+
     /* ── Render pass ─────────────────────────────────────────────────────── */
     SDL_GPUColorTargetInfo color_target = {
         .texture     = swapchain,
@@ -596,37 +679,33 @@ void renderer_draw_frame(Renderer *r, const MatchState *match)
               (Vec4){0.15f, 0.35f, 0.15f, 1.0f},
               vp, light_dir);
 
-    /* ── Arena walls (drawn as scaled boxes) ─────────────────────────────── */
+    /* ── Arena walls - opaque pass first, then transparent ─────────────────── */
     float wh = ARENA_WALL_H * 0.5f;
-    float wt = 0.5f;   /* wall thickness */
+    float wt = 0.5f;
 
-    /* Left wall */
-    Mat4 wall_l = mat4_mul(
-        mat4_translate((Vec3){-ARENA_HALF_WID - wt, wh, 0}),
-        mat4_scale((Vec3){wt, wh, ARENA_HALF_LEN}));
-    draw_mesh(cmd, pass, &r->mesh_car, wall_l,
-              (Vec4){0.3f, 0.3f, 0.35f, 1.0f}, vp, light_dir);
+    typedef struct { Mat4 m; Vec4 base_color; int wall_id; } WallDraw;
+    WallDraw wall_draws[WALL_COUNT] = {
+        { mat4_mul(mat4_translate((Vec3){-ARENA_HALF_WID-wt, wh, 0}),
+                   mat4_scale((Vec3){wt, wh, ARENA_HALF_LEN})),
+          {0.3f,0.3f,0.35f,1}, WALL_LEFT },
+        { mat4_mul(mat4_translate((Vec3){ ARENA_HALF_WID+wt, wh, 0}),
+                   mat4_scale((Vec3){wt, wh, ARENA_HALF_LEN})),
+          {0.3f,0.3f,0.35f,1}, WALL_RIGHT },
+        { mat4_mul(mat4_translate((Vec3){0, wh, -ARENA_HALF_LEN-wt}),
+                   mat4_scale((Vec3){ARENA_HALF_WID, wh, wt})),
+          {0.2f,0.2f,0.5f,1}, WALL_BLUE },
+        { mat4_mul(mat4_translate((Vec3){0, wh,  ARENA_HALF_LEN+wt}),
+                   mat4_scale((Vec3){ARENA_HALF_WID, wh, wt})),
+          {0.5f,0.3f,0.1f,1}, WALL_ORANGE },
+    };
 
-    /* Right wall */
-    Mat4 wall_r = mat4_mul(
-        mat4_translate((Vec3){ARENA_HALF_WID + wt, wh, 0}),
-        mat4_scale((Vec3){wt, wh, ARENA_HALF_LEN}));
-    draw_mesh(cmd, pass, &r->mesh_car, wall_r,
-              (Vec4){0.3f, 0.3f, 0.35f, 1.0f}, vp, light_dir);
-
-    /* Blue back wall */
-    Mat4 wall_b = mat4_mul(
-        mat4_translate((Vec3){0, wh, -ARENA_HALF_LEN - wt}),
-        mat4_scale((Vec3){ARENA_HALF_WID, wh, wt}));
-    draw_mesh(cmd, pass, &r->mesh_car, wall_b,
-              (Vec4){0.2f, 0.2f, 0.5f, 1.0f}, vp, light_dir);
-
-    /* Orange back wall */
-    Mat4 wall_o = mat4_mul(
-        mat4_translate((Vec3){0, wh, ARENA_HALF_LEN + wt}),
-        mat4_scale((Vec3){ARENA_HALF_WID, wh, wt}));
-    draw_mesh(cmd, pass, &r->mesh_car, wall_o,
-              (Vec4){0.5f, 0.3f, 0.1f, 1.0f}, vp, light_dir);
+    /* Draw opaque walls first */
+    for (int w = 0; w < WALL_COUNT; w++) {
+        if (r->wall_alpha[wall_draws[w].wall_id] >= 0.95f) {
+            draw_mesh(cmd, pass, &r->mesh_car, wall_draws[w].m,
+                      wall_draws[w].base_color, vp, light_dir);
+        }
+    }
 
     /* ── Boost pads ──────────────────────────────────────────────────────── */
     for (int i = 0; i < BOOST_PAD_COUNT; i++) {
@@ -663,6 +742,41 @@ void renderer_draw_frame(Renderer *r, const MatchState *match)
     }
 
     SDL_EndGPURenderPass(pass);
+
+    /* ── Transparent wall pass ───────────────────────────────────────────── */
+    bool any_transparent = false;
+    for (int w = 0; w < WALL_COUNT; w++) {
+        if (r->wall_alpha[wall_draws[w].wall_id] < 0.95f) {
+            any_transparent = true; break;
+        }
+    }
+
+    if (any_transparent) {
+        SDL_GPUColorTargetInfo transp_color = {
+            .texture  = swapchain,
+            .load_op  = SDL_GPU_LOADOP_LOAD,   /* keep existing pixels */
+            .store_op = SDL_GPU_STOREOP_STORE,
+        };
+        SDL_GPUDepthStencilTargetInfo transp_depth = {
+            .texture  = r->depth_texture,
+            .load_op  = SDL_GPU_LOADOP_LOAD,
+            .store_op = SDL_GPU_STOREOP_DONT_CARE,
+            .cycle    = false,
+        };
+        SDL_GPURenderPass *tpass = SDL_BeginGPURenderPass(cmd, &transp_color, 1, &transp_depth);
+        SDL_BindGPUGraphicsPipeline(tpass, r->pipeline_transparent);
+
+        for (int w = 0; w < WALL_COUNT; w++) {
+            float a = r->wall_alpha[wall_draws[w].wall_id];
+            if (a < 0.95f) {
+                Vec4 c = wall_draws[w].base_color;
+                c.w = a;
+                draw_mesh(cmd, tpass, &r->mesh_car, wall_draws[w].m, c, vp, light_dir);
+            }
+        }
+        SDL_EndGPURenderPass(tpass);
+    }
+
     SDL_SubmitGPUCommandBuffer(cmd);
 }
 

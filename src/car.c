@@ -18,14 +18,15 @@
  * Blue  team (negative Z half): cars 0,1,2
  * Orange team (positive Z half): cars 3,4,5
  */
-static const float spawn_x[TEAM_SIZE]   = { -5.0f, 0.0f,  5.0f };
-static const float spawn_z_blue         = -20.0f;
-static const float spawn_z_orange       =  20.0f;
+/* Spread cars out: left/center/right, and stagger Z so they don't all rush at once */
+static const float spawn_x[TEAM_SIZE]   = { -8.0f, 0.0f, 8.0f };
+static const float spawn_z_blue[TEAM_SIZE]   = { -22.0f, -18.0f, -22.0f };
+static const float spawn_z_orange[TEAM_SIZE] = {  22.0f,  18.0f,  22.0f };
 
 void car_get_spawn_pos(int id, TeamID team, Vec3 *out_pos, float *out_yaw)
 {
     int slot = id % TEAM_SIZE;
-    float z  = (team == TEAM_BLUE) ? spawn_z_blue : spawn_z_orange;
+    float z   = (team == TEAM_BLUE) ? spawn_z_blue[slot] : spawn_z_orange[slot];
     float yaw = (team == TEAM_BLUE) ? 0.0f : (float)M_PI;  /* face center */
 
     *out_pos = (Vec3){ spawn_x[slot], CAR_HALF_HGT + 0.05f, z };
@@ -44,7 +45,7 @@ void car_init(Car *car, int id, TeamID team, PlayerType type, Vec3 spawn_pos)
 
     car->half_extents = (Vec3){ CAR_HALF_LEN, CAR_HALF_HGT, CAR_HALF_WID };
 
-    rb_init(&car->body, spawn_pos, CAR_MASS, 0.3f);
+    rb_init(&car->body, spawn_pos, CAR_MASS, 0.1f);
     car->body.linear_drag  = 0.05f;
     car->body.angular_drag = 0.8f;
     car->body.friction     = 0.6f;
@@ -288,6 +289,19 @@ void car_update(Car *car, float dt)
     if (car->body.pos.y < CAR_HALF_HGT) {
         car->body.pos.y = CAR_HALF_HGT;
         if (car->body.vel.y < 0.0f) car->body.vel.y = 0.0f;
+    }
+
+    /* On the ground: kill pitch/roll angular velocity, keep only yaw.
+       Cars should stay upright - they are not ragdolls. */
+    if (car->on_ground) {
+        car->body.ang_vel.x = 0.0f;
+        car->body.ang_vel.z = 0.0f;
+
+        /* Also snap orientation back toward upright (remove pitch/roll from quaternion) */
+        /* Extract just the yaw component by projecting forward onto XZ plane */
+        Vec3 fwd = car_forward(car);
+        float yaw = atan2f(fwd.x, fwd.z);
+        car->body.rot = quat_from_axis_angle((Vec3){0,1,0}, yaw);
     }
 
     /* Jump timer */

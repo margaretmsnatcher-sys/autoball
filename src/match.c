@@ -197,7 +197,7 @@ void match_update(MatchState *match, float dt)
             car_update(&match->cars[i], dt);
         }
 
-        /* ── Car vs ball collision (only when ball is in play) ──────────── */
+        /* ── Car vs ball collision (kick-based, no sticky loop) ───────────── */
         if (match->ball.in_play) {
             for (int i = 0; i < MAX_PLAYERS; i++) {
                 Car *car = &match->cars[i];
@@ -205,25 +205,79 @@ void match_update(MatchState *match, float dt)
                     match->ball.body.pos, match->ball.radius,
                     car->body.pos, car->half_extents);
 
-                if (cr.hit) {
-                    resolve_collision(&match->ball.body, &car->body, cr);
-                    match->ball.last_touch_id = car->id;
-                    match->ball.last_touch_t  = match->time_remaining;
-                    car->shots++;
-                }
+                if (!cr.hit) continue;
+
+                /* Step 1: Push ball fully outside the car this frame */
+                match->ball.body.pos = vec3_add(
+                    match->ball.body.pos,
+                    vec3_scale(cr.normal, cr.depth + 0.05f));
+
+                /* Step 2: Compute kick velocity.
+                   Ball gets car velocity + relative approach speed, reflected off normal.
+                   Minimum kick speed ensures ball always moves away. */
+                Vec3 car_vel  = car->body.vel;
+                Vec3 ball_vel = match->ball.body.vel;
+
+                /* Relative velocity of ball toward car */
+                float approach = vec3_dot(vec3_sub(ball_vel, car_vel), cr.normal);
+
+                /* Only kick if ball is moving toward car or car is moving toward ball */
+                float car_speed_toward = -vec3_dot(car_vel, cr.normal);
+                float kick_speed = car_speed_toward * 1.2f - approach * 0.6f;
+
+                /* Minimum kick so ball always bounces away */
+                if (kick_speed < 4.0f) kick_speed = 4.0f;
+
+                /* Apply kick to ball along collision normal */
+                Vec3 kick = vec3_scale(cr.normal, kick_speed);
+                match->ball.body.vel = vec3_add(
+                    vec3_sub(ball_vel, vec3_scale(cr.normal, approach)),
+                    kick);
+
+                /* Clamp ball speed to reasonable max */
+                float bspd = vec3_len(match->ball.body.vel);
+                if (bspd > 40.0f)
+                    match->ball.body.vel = vec3_scale(
+                        vec3_norm(match->ball.body.vel), 40.0f);
+
+                match->ball.last_touch_id = car->id;
+                match->ball.last_touch_t  = match->time_remaining;
+                car->shots++;
             }
         }
 
-        /* ── Car vs car collision ─────────────────────────────────────── */
+        /* ── Car vs car collision (simple AABB push-apart) ─────────────── */
         for (int i = 0; i < MAX_PLAYERS; i++) {
             for (int j = i + 1; j < MAX_PLAYERS; j++) {
                 Car *a = &match->cars[i];
                 Car *b = &match->cars[j];
-                CollisionResult cr = collide_sphere_aabb(
-                    a->body.pos, CAR_HALF_LEN,
-                    b->body.pos, b->half_extents);
-                if (cr.hit) {
-                    resolve_collision(&a->body, &b->body, cr);
+                Vec3 delta = vec3_sub(b->body.pos, a->body.pos);
+                /* Only check XZ plane - cars stay on ground */
+                float dx = fabsf(delta.x);
+                float dz = fabsf(delta.z);
+                float min_x = a->half_extents.x + b->half_extents.x;
+                float min_z = a->half_extents.z + b->half_extents.z;
+                if (dx < min_x && dz < min_z) {
+                    /* Push apart on the axis of least overlap */
+                    float overlap_x = min_x - dx;
+                    float overlap_z = min_z - dz;
+                    Vec3 push;
+                    if (overlap_x < overlap_z) {
+                        push = (Vec3){ (delta.x >= 0 ? 1.0f : -1.0f) * overlap_x * 0.5f, 0, 0 };
+                    } else {
+                        push = (Vec3){ 0, 0, (delta.z >= 0 ? 1.0f : -1.0f) * overlap_z * 0.5f };
+                    }
+                    a->body.pos = vec3_sub(a->body.pos, push);
+                    b->body.pos = vec3_add(b->body.pos, push);
+                    /* Exchange velocity along push axis (elastic bump) */
+                    float va = vec3_dot(a->body.vel, vec3_norm(push));
+                    float vb = vec3_dot(b->body.vel, vec3_norm(push));
+                    if (va - vb > 0.0f) {
+                        Vec3 n = vec3_norm(push);
+                        float impulse = (va - vb) * 0.5f;
+                        a->body.vel = vec3_sub(a->body.vel, vec3_scale(n, impulse));
+                        b->body.vel = vec3_add(b->body.vel, vec3_scale(n, impulse));
+                    }
                 }
             }
         }

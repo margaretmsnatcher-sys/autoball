@@ -36,11 +36,19 @@ typedef struct {
     float distance;
 } Camera;
 
+/* ── Wall IDs for transparency tracking ─────────────────────────────────── */
+#define WALL_LEFT   0
+#define WALL_RIGHT  1
+#define WALL_BLUE   2
+#define WALL_ORANGE 3
+#define WALL_COUNT  4
+
 /* ── Renderer context ────────────────────────────────────────────────────── */
 typedef struct {
     SDL_Window              *window;
     SDL_GPUDevice           *gpu;
-    SDL_GPUGraphicsPipeline *pipeline_world;
+    SDL_GPUGraphicsPipeline *pipeline_world;       /* opaque */
+    SDL_GPUGraphicsPipeline *pipeline_transparent; /* alpha blended */
     SDL_GPUGraphicsPipeline *pipeline_hud;
     SDL_GPUTexture          *depth_texture;
     GPUMesh mesh_arena_floor;
@@ -54,6 +62,8 @@ typedef struct {
     Camera  camera;
     int     width;
     int     height;
+    /* Per-wall alpha: 1.0 = opaque, ~0.15 = transparent */
+    float   wall_alpha[WALL_COUNT];
 } Renderer;
 
 /* ── Uniform structs ─────────────────────────────────────────────────────── */

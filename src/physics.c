@@ -57,12 +57,15 @@ void rb_apply_impulse(RigidBody *rb, Vec3 impulse, Vec3 contact_world)
     /* Linear component */
     rb->vel = vec3_add(rb->vel, vec3_scale(impulse, rb->inv_mass));
 
-    /* Angular component: torque = r x impulse */
-    Vec3 r      = vec3_sub(contact_world, rb->pos);
-    Vec3 torque = vec3_cross(r, impulse);
-    /* Simplified: treat inertia tensor as scalar (sphere approximation) */
-    float inertia_inv = rb->inv_mass * 2.5f;
-    rb->ang_vel = vec3_add(rb->ang_vel, vec3_scale(torque, inertia_inv));
+    /* Angular component: only apply to ball (small objects), not cars.
+       Cars use a separate upright-correction in car_update.
+       Threshold: inv_mass > 0.5 means mass < 2kg = ball. */
+    if (rb->inv_mass > 0.5f) {
+        Vec3 r      = vec3_sub(contact_world, rb->pos);
+        Vec3 torque = vec3_cross(r, impulse);
+        float inertia_inv = rb->inv_mass * 2.5f;
+        rb->ang_vel = vec3_add(rb->ang_vel, vec3_scale(torque, inertia_inv));
+    }
 }
 
 void rb_apply_force(RigidBody *rb, Vec3 force)
@@ -158,15 +161,15 @@ void resolve_collision(RigidBody *a, RigidBody *b, CollisionResult cr)
 {
     if (!cr.hit) return;
 
-    /* Positional correction (Baumgarte) */
     float total_inv = a->inv_mass + b->inv_mass;
     if (total_inv < 1e-6f) return;
 
-    float correction = cr.depth / total_inv * 0.8f;
+    /* Positional correction - push objects apart */
+    float correction = (cr.depth + 0.01f) / total_inv;
     a->pos = vec3_sub(a->pos, vec3_scale(cr.normal, correction * a->inv_mass));
     b->pos = vec3_add(b->pos, vec3_scale(cr.normal, correction * b->inv_mass));
 
-    /* Relative velocity at contact */
+    /* Velocity resolution */
     Vec3 rel_vel = vec3_sub(b->vel, a->vel);
     float vel_along_normal = vec3_dot(rel_vel, cr.normal);
 
