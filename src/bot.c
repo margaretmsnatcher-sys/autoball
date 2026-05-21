@@ -133,14 +133,18 @@ void bot_assign_roles(Car *team_cars, BotState *team_bots, int count,
     for (int i = 0; i < count; i++) {
         if (team_cars[i].type != PLAYER_BOT) continue;
 
-        if (i == attacker_idx && ball_in_our_half) {
+        /* Always assign an attacker regardless of ball position.
+           When ball is in our half the attacker chases it directly.
+           When ball is in opponent half the attacker still pushes forward. */
+        if (i == attacker_idx) {
             team_bots[i].role = BOT_ROLE_ATTACKER;
-        } else if (i == defender_idx) {
+        } else if (i == defender_idx && i != attacker_idx) {
             team_bots[i].role = BOT_ROLE_DEFENDER;
         } else {
             team_bots[i].role = BOT_ROLE_SUPPORT;
         }
     }
+    (void)ball_in_our_half; /* used for future role weighting */
 }
 
 /* ── bot_think ───────────────────────────────────────────────────────────── */

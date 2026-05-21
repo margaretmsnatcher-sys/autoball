@@ -166,10 +166,9 @@ void match_update(MatchState *match, float dt)
 
         /* ── Bot AI ──────────────────────────────────────────────────── */
         /* Re-assign roles every 5 seconds */
-        static float role_timer = 0.0f;
-        role_timer += dt;
-        if (role_timer > 5.0f) {
-            role_timer = 0.0f;
+        match->role_timer += dt;
+        if (match->role_timer > 5.0f) {
+            match->role_timer = 0.0f;
             bot_assign_roles(match->cars,
                              match->bots,
                              TEAM_SIZE,
@@ -198,18 +197,20 @@ void match_update(MatchState *match, float dt)
             car_update(&match->cars[i], dt);
         }
 
-        /* ── Car vs ball collision ────────────────────────────────────── */
-        for (int i = 0; i < MAX_PLAYERS; i++) {
-            Car *car = &match->cars[i];
-            CollisionResult cr = collide_sphere_aabb(
-                match->ball.body.pos, match->ball.radius,
-                car->body.pos, car->half_extents);
+        /* ── Car vs ball collision (only when ball is in play) ──────────── */
+        if (match->ball.in_play) {
+            for (int i = 0; i < MAX_PLAYERS; i++) {
+                Car *car = &match->cars[i];
+                CollisionResult cr = collide_sphere_aabb(
+                    match->ball.body.pos, match->ball.radius,
+                    car->body.pos, car->half_extents);
 
-            if (cr.hit) {
-                resolve_collision(&match->ball.body, &car->body, cr);
-                match->ball.last_touch_id = car->id;
-                match->ball.last_touch_t  = match->time_remaining;
-                car->shots++;
+                if (cr.hit) {
+                    resolve_collision(&match->ball.body, &car->body, cr);
+                    match->ball.last_touch_id = car->id;
+                    match->ball.last_touch_t  = match->time_remaining;
+                    car->shots++;
+                }
             }
         }
 

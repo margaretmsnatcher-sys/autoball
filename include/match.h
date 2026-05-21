@@ -31,6 +31,7 @@ typedef struct {
     int        human_car_id;
     int        overtime;
     int        kickoff_team;
+    float      role_timer;        /* bot role rebalance timer */
 } MatchState;
 
 void match_init(MatchState *match, int human_car_id, float bot_skill);

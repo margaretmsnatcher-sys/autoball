@@ -274,9 +274,11 @@ void car_update(Car *car, float dt)
 {
     Vec3 gravity = {0, -CAR_GRAVITY, 0};
 
+    /* Apply input once per frame (not per sub-step - avoids 4x force multiplication) */
+    car_apply_input(car, dt);
+
     float sub_dt = dt / (float)PHYSICS_SUBSTEPS;
     for (int i = 0; i < PHYSICS_SUBSTEPS; i++) {
-        car_apply_input(car, sub_dt);
         rb_integrate(&car->body, gravity, sub_dt);
         collide_car_arena(&car->body, car->half_extents);
         update_ground_contact(car);

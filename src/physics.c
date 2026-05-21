@@ -193,9 +193,9 @@ void resolve_collision_static(RigidBody *a, CollisionResult cr)
         Vec3 reflect = vec3_scale(cr.normal, -(1.0f + a->restitution) * vel_along);
         a->vel = vec3_add(a->vel, reflect);
 
-        /* Friction on tangential component */
+        /* Friction on tangential component only (not the reflected normal component) */
         Vec3 tang = vec3_sub(a->vel, vec3_scale(cr.normal, vec3_dot(a->vel, cr.normal)));
-        a->vel = vec3_sub(a->vel, vec3_scale(tang, a->friction));
+        a->vel = vec3_sub(a->vel, vec3_scale(tang, a->friction * 0.1f));
     }
 }
 

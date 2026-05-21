@@ -172,15 +172,6 @@ static bool build_floor(SDL_GPUDevice *gpu, GPUMesh *mesh,
     return upload_mesh(gpu, mesh, verts, 4, idx, 6);
 }
 
-/* Axis-aligned wall quad */
-static bool build_wall_quad(SDL_GPUDevice *gpu, GPUMesh *mesh,
-                              Vertex v0, Vertex v1, Vertex v2, Vertex v3)
-{
-    Vertex verts[4] = {v0, v1, v2, v3};
-    uint16_t idx[] = {0,1,2, 0,2,3};
-    return upload_mesh(gpu, mesh, verts, 4, idx, 6);
-}
-
 /* UV sphere for the ball */
 static bool build_sphere(SDL_GPUDevice *gpu, GPUMesh *mesh,
                           float radius, int stacks, int slices,
@@ -344,9 +335,6 @@ int renderer_init(Renderer *r, SDL_Window *window)
     };
 
     SDL_GPUTextureFormat sc_fmt = SDL_GetGPUSwapchainTextureFormat(r->gpu, window);
-    fprintf(stderr, "DEBUG: swapchain format = %d, shader formats = 0x%x\n",
-            (int)sc_fmt, (int)SDL_GetGPUShaderFormats(r->gpu));
-
     SDL_GPUColorTargetDescription color_target_desc;
     SDL_zero(color_target_desc);
     color_target_desc.format = sc_fmt;

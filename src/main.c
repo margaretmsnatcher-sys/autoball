@@ -104,9 +104,13 @@ int main(int argc, char *argv[])
 
         /* ── Check match end ──────────────────────────────────────────── */
         if (match_is_over(&match)) {
-            /* For now just restart; later show a results screen */
-            SDL_Delay(3000);
-            match_init(&match, 0, BOT_SKILL_MEDIUM);
+            /* Non-blocking 3-second postgame pause before restart */
+            static uint64_t postgame_start = 0;
+            if (postgame_start == 0) postgame_start = SDL_GetTicks();
+            if (SDL_GetTicks() - postgame_start >= 3000) {
+                postgame_start = 0;
+                match_init(&match, 0, BOT_SKILL_MEDIUM);
+            }
         }
     }
 
